@@ -1,3 +1,4 @@
+import { delay } from "https://deno.land/std@0.151.0/async/delay.ts";
 import {ConnectionOptions, IntConnOpts} from "../types/ConnectionOptions.ts";
 import {Commands, StatusCodes, Types} from "../util/enums.ts";
 import Lock from "./Lock.ts";
@@ -197,8 +198,8 @@ export class FTPClient implements Deno.Closer {
      * Download a file from the server.
      * @param fileName
      */
-    public async download(fileName: string) {
-        let conn = await this.downloadStream(fileName);
+    public async download(fileName: string, seek = 0) {
+        let conn = await this.downloadStream(fileName, seek);
         let data = await FTPClient.recieve(conn);
         await this.finalizeStream();
 
@@ -210,7 +211,7 @@ export class FTPClient implements Deno.Closer {
      * **Please call FTPClient.finalizeStream()** to release the lock after the file is done downloading.
      * @param fileName
      */
-    public async downloadStream(fileName: string): Promise<Deno.Reader> {
+    public async downloadStream(fileName: string, seek = 0): Promise<Deno.Reader> {
         await this.lock.lock();
         if (this.conn === undefined) {
             this.lock.unlock();
@@ -218,7 +219,11 @@ export class FTPClient implements Deno.Closer {
         }
         await this.initializeDataConnection();
 
-        let res = await this.command(Commands.Retrieve, fileName);
+        if (seek > 0) {
+            const res = await this.command(Commands.Restart, seek.toString());
+            this.assertStatus(StatusCodes.NeedFileInfo, res, this.dataConn, this.activeListener);
+        }
+        const res = await this.command(Commands.Retrieve, fileName);
         this.assertStatus(StatusCodes.StartTransferConnection, res, this.dataConn, this.activeListener);
 
         return await this.finalizeDataConnection();
@@ -274,8 +279,8 @@ export class FTPClient implements Deno.Closer {
     public async finalizeStream() {
         free(this.dataConn);
 
-        let res = await this.getStatus();
-        this.assertStatus(StatusCodes.DataClose, res);
+        let res = await Promise.race([this.getStatus(), delay(1000)]);
+        res && this.assertStatus(StatusCodes.DataClose, res);
 
         this.lock.unlock();
     }
@@ -489,8 +494,8 @@ export class FTPClient implements Deno.Closer {
     /**
      * Please call this function when you are done to avoid loose connections.
      */
-    public async close() {
-        await this.lock.lock();
+    public async close(force = false) {
+        force || await this.lock.lock();
         free(this.conn);
         free(this.activeListener);
         free(this.dataConn);

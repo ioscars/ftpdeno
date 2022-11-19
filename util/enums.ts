@@ -25,6 +25,7 @@ enum Commands {
 
     Size = "SIZE",
     ModifiedTime = "MDTM",
+    Restart = "REST",
 }
 
 enum Types {
